@@ -14,17 +14,20 @@ using namespace arctic;  // NOLINT
 static constexpr double Usec = 0.000001;
 static constexpr double Msec = 0.001;
 
-// ----------------------------
-// out global time
+// TODO: move definitions to own cpp file
 
-static double CurrentTime = 0; // seconds
+// ----------------------------
+// our global time
+//
+
+static double CurrentTimeSeconds = 0;
 
 double Now() {
-    return CurrentTime;
+    return CurrentTimeSeconds;
 }
 
 void AdvanceTime(double dt) {
-    CurrentTime += dt;
+    CurrentTimeSeconds += dt;
 }
 
 // ----------------------------
@@ -73,6 +76,20 @@ public:
         }
     }
 
+    static Histogram HistogramWithUsBuckets() {
+        return Histogram(
+            { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
+              16, 24, 32, 40, 48, 50, 54, 62, 70,
+              80, 90, 100, 110, 120, 130, 140, 150, 160, 170, 180, 190, 200,
+              250, 300, 350, 450, 500, 750, 1000, 1250, 1500, 1750, 2000,
+              2250, 2500, 2750, 3000, 3250, 3500, 3750, 4000, 4250, 4500, 4750, 5000,
+              6000, 7000, 8000, 9000, 10000, 11000, 12000, 13000, 14000, 15000, 16000, 17000, 18000, 19000, 20000,
+              24000, 32000, 40000, 48000, 56000, 64000,
+              128000, 256000, 512000,
+              1000000, 1500000, 2000000, 3000000, 4000000
+            });
+    }
+
     void AddDuration(int duration) {
         for (size_t i = 0; i < Buckets.size(); ++i) {
             if (duration < Buckets[i]) {
@@ -112,7 +129,8 @@ public:
 
 struct Event {
     Event()
-        : StartTime(Now())
+        : Id(++EventCounter)
+        , StartTime(Now())
     {
         StartStage();
     }
@@ -132,9 +150,15 @@ struct Event {
     }
 
 private:
+    size_t Id;
+
     double StartTime = 0;
     double StageStarted = 0;
+
+    static size_t EventCounter;
 };
+
+size_t Event::EventCounter = 0;
 
 // ----------------------------
 // IPipeLineItem
@@ -164,10 +188,7 @@ class Queue : public IPipeLineItem {
 public:
     Queue(const char* name, size_t initialEvents = 0)
         : Name(name)
-        , QueueTimeUs({ 1, 2, 3, 4, 5, 8, 10, 20, 40, 50, 60, 70, 80,
-                        100, 200, 250, 500, 750,
-                        1000, 1500, 2000, 4000, 8000, 16000, 32000, 64000, 128000, 256000, 512000
-                      })
+        , QueueTimeUs(Histogram::HistogramWithUsBuckets())
     {
         for (size_t i = 0; i < initialEvents; ++i) {
             Events.emplace_back();
@@ -292,7 +313,7 @@ public:
     {
     }
 
-    void Tick(double dt) override {
+    void Tick(double) override {
         if (_IsWorking) {
             auto now = Now();
             if (now - StartTime >= ExecutionTime) {
@@ -352,7 +373,7 @@ public:
         }
     }
 
-    void Tick(double dt) override {
+    void Tick(double) override {
         if (_IsWorking) {
             auto now = Now();
             if (now - StartTime >= ExecutionTime) {
@@ -474,8 +495,6 @@ private:
     size_t ReadyEventsCount = 0;
 };
 
-using FixedTimeExecutor = Executor<FixedTimeProcessor>;
-
 // ----------------------------
 // ClosedPipeLine
 
@@ -484,12 +503,7 @@ class ClosedPipeLine {
 public:
     ClosedPipeLine(Sprite sprite)
         : _Sprite(sprite)
-        , EventDurationsUs(
-            { 1, 2, 3, 4, 5, 8, 10, 20, 40, 50, 60, 70, 80,
-              100, 200, 250, 500, 750,
-              1000, 1500, 2000, 4000, 8000, 16000, 32000, 64000, 128000, 256000, 512000,
-              1000000, 1500000, 2000000, 3000000, 4000000
-            })
+        , EventDurationsUs(Histogram::HistogramWithUsBuckets())
     {
     }
 
@@ -498,7 +512,7 @@ public:
     }
 
     void AddFixedTimeExecutor(const char* name, size_t processorCount, double executionTime) {
-        Stages.emplace_back(new FixedTimeExecutor(name, processorCount, executionTime));
+        Stages.emplace_back(new Executor<FixedTimeProcessor>(name, processorCount, executionTime));
     }
 
     void AddPercentileTimeExecutor(const char* name, size_t processorCount, PercentileTimeProcessor::Percentiles percentiles) {
@@ -519,11 +533,12 @@ public:
             auto event = lastStage->PopEvent();
 
             ++TotalFinishedEvents;
-            RPS = (size_t)(TotalFinishedEvents / TotalTimePassed);
             EventDurationsUs.AddDuration((int)(event.GetDuration() * 1000000));
 
             inputQueue->PushEvent(Event());
         }
+
+        AvgRPS = (size_t)(TotalFinishedEvents / TotalTimePassed);
 
         if (Stages.size() <= 2) {
             return;
@@ -578,9 +593,9 @@ public:
 
         char text[512];
         snprintf(text, sizeof(text),
-            "TimePassed: %.2f s, RPS: %ld\np10: %dus, p50: %dus, p90: %dus, p99: %dus, p100: %dus",
+            "TimePassed: %.2f s, AvgRPS: %ld\np10: %d us, p50: %d us, p90: %d us, p99: %d us, p100: %d us",
             TotalTimePassed,
-            RPS,
+            AvgRPS,
             EventDurationsUs.GetPercentile(10),
             EventDurationsUs.GetPercentile(50),
             EventDurationsUs.GetPercentile(90),
@@ -597,7 +612,7 @@ private:
     double TotalTimePassed = 0;
 
     Histogram EventDurationsUs;
-    size_t RPS = 0;
+    size_t AvgRPS = 0;
 
 private:
     Sprite _Sprite;

@@ -10,16 +10,16 @@ using namespace queue_sim;  // NOLINT
 constexpr double updateScreenInterval = 0.8;
 constexpr double tickInterval = 1 * Usec;
 
-void EasyMain() {
-    ResizeScreen(1024, 768);
+void SetupCurrentPdiskModel(ClosedPipeLine &pipeline) {
+    constexpr size_t startQueueSize = 16;
 
-    ClosedPipeLine pipeline(GetEngine()->GetBackbuffer());
+    constexpr size_t pdiskThreads = 1;
+    constexpr double pdiskExecTime = 10 * Usec;
 
-    pipeline.AddQueue("InputQ", 16);
-    pipeline.AddFixedTimeExecutor("PDisk", 1, 10 * Usec);
-    pipeline.AddQueue("SubmitQ", 0);
-    pipeline.AddFixedTimeExecutor("Smb", 1, 5 * Usec);
+    constexpr size_t smbThreads = 1;
+    constexpr double smbExecTime = 5 * Usec;
 
+    constexpr size_t NVMeInflight = 128;
     PercentileTimeProcessor::Percentiles diskPercentiles;
     diskPercentiles.P10 = 10 * Usec;
     diskPercentiles.P50 = 20 * Usec;
@@ -30,26 +30,36 @@ void EasyMain() {
     diskPercentiles.P99999 = 500 * Usec;
     diskPercentiles.P100 = 1;
 
-    pipeline.AddPercentileTimeExecutor("NVMe", 128, diskPercentiles);
+    pipeline.AddQueue("InputQ", startQueueSize);
+    pipeline.AddFixedTimeExecutor("PDisk", pdiskThreads, pdiskExecTime);
+    pipeline.AddQueue("SubmitQ", 0);
+    pipeline.AddFixedTimeExecutor("Smb", smbThreads, smbExecTime);
+    pipeline.AddPercentileTimeExecutor("NVMe", NVMeInflight, diskPercentiles);
+}
+
+void EasyMain() {
+    ResizeScreen(1024, 768);
+
+    ClosedPipeLine pipeline(GetEngine()->GetBackbuffer());
+    SetupCurrentPdiskModel(pipeline);
 
     double prevTime = 0;
 
-    while (!IsKeyDownward(kKeyEscape)) {
-        // IsKeyDown -> hold
+    double currentTime = Now();
 
-        double currentTime = Now();
+    for (size_t i = 0; i < 10000000; ++i) {
+        if (IsKeyDownward(kKeyEscape)) {
+            break;
+        }
+        AdvanceTime(tickInterval);
+        pipeline.Tick(tickInterval);
 
-        for (size_t i = 0; i < 10000000; ++i) {
-            AdvanceTime(tickInterval);
-            pipeline.Tick(tickInterval);
-
-            auto now = Now();
-            if (now - prevTime > updateScreenInterval) {
-                Clear();
-                prevTime = now;
-                pipeline.Draw();
-                ShowFrame();
-            }
+        auto now = Now();
+        if (now - prevTime > updateScreenInterval) {
+            Clear();
+            prevTime = now;
+            pipeline.Draw();
+            ShowFrame();
         }
     }
 }
