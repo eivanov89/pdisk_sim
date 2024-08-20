@@ -20,21 +20,20 @@ void SetupCurrentPdiskModel(ClosedPipeLine &pipeline) {
     constexpr double smbExecTime = 5 * Usec;
 
     constexpr size_t NVMeInflight = 128;
-    PercentileTimeProcessor::Percentiles diskPercentiles;
-    diskPercentiles.P10 = 10 * Usec;
-    diskPercentiles.P50 = 20 * Usec;
-    diskPercentiles.P90 = 70 * Usec;
-    diskPercentiles.P99 = 100 * Usec;
-    diskPercentiles.P999 = 200 * Usec;
-    diskPercentiles.P9999 = 300 * Usec;
-    diskPercentiles.P99999 = 500 * Usec;
-    diskPercentiles.P100 = 1;
+    PercentileTimeProcessor::Percentiles diskPercentilesUs = {
+        {16.47, 12 * Usec},
+        {87.26, 25 * Usec},
+        {99.7, 50 * Usec},
+        {99.992, 100 * Usec},
+        {99.9968, 200 * Usec},
+        {1000, 4000 * Usec},
+    };
 
     pipeline.AddQueue("InputQ", startQueueSize);
     pipeline.AddFixedTimeExecutor("PDisk", pdiskThreads, pdiskExecTime);
     pipeline.AddQueue("SubmitQ", 0);
     pipeline.AddFixedTimeExecutor("Smb", smbThreads, smbExecTime);
-    pipeline.AddPercentileTimeExecutor("NVMe", NVMeInflight, diskPercentiles);
+    pipeline.AddPercentileTimeExecutor("NVMe", NVMeInflight, diskPercentilesUs);
     pipeline.AddFlushController("Flush");
 }
 

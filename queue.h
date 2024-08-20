@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <deque>
 #include <optional>
+#include <random>
 #include <set>
 
 #include "engine/easy.h"
@@ -347,45 +348,39 @@ private:
 
 class PercentileTimeProcessor : public ProcessorBase {
 public:
-    struct Percentiles {
-        double P10 = 0;
-        double P50 = 0;
-        double P90 = 0;
-        double P99 = 0;
-        double P999 = 0;
-        double P9999 = 0;
-        double P99999 = 0;
-        double P100 = 0;
-
-        Percentiles() = default;
+    struct Percentile {
+        double Percentile = 0;
+        double Value = 0;
     };
 
+    using Percentiles = std::vector<Percentile>;
+
     PercentileTimeProcessor(Percentiles percentiles)
-        : _Percentiles(percentiles)
+        : _Percentiles(std::move(percentiles))
+        , Rd(std::make_unique<std::random_device>())
+        , Gen(std::make_unique<std::mt19937>((*Rd)()))
+        , Dis(std::make_unique<std::uniform_real_distribution<>>(0, 100))
     {
+        if (_Percentiles.empty()) {
+            throw std::runtime_error("Percentiles must not be empty");
+        }
     }
+
+    PercentileTimeProcessor(const PercentileTimeProcessor& other) = delete;
+    PercentileTimeProcessor(PercentileTimeProcessor&& other) = default;
 
     void StartWork(Event event) override {
         ProcessorBase::StartWork(event);
 
-        auto r = Random(0, 100 * 1000 - 1);
-        if (r < 10000) {
-            ExecutionTime = _Percentiles.P10;
-        } else if (r < 50000) {
-            ExecutionTime = _Percentiles.P50;
-        } else if (r < 90000) {
-            ExecutionTime = _Percentiles.P90;
-        } else if (r < 99000) {
-            ExecutionTime = _Percentiles.P99;
-        } else if (r < 99900) {
-            ExecutionTime = _Percentiles.P999;
-        } else if (r < 99990) {
-            ExecutionTime = _Percentiles.P9999;
-        } else if (r < 99999) {
-            ExecutionTime = _Percentiles.P99999;
-        } else {
-            ExecutionTime = _Percentiles.P100;
+        double r = (*Dis)(*Gen);
+        for (auto& percentile: _Percentiles) {
+            if (r < percentile.Percentile) {
+                ExecutionTime = percentile.Value;
+                return;
+            }
         }
+
+        ExecutionTime = _Percentiles.back().Value;
     }
 
     void Tick(double) override {
@@ -401,6 +396,10 @@ public:
 
 private:
     Percentiles _Percentiles;
+    std::unique_ptr<std::random_device> Rd;
+    std::unique_ptr<std::mt19937> Gen;
+    std::unique_ptr<std::uniform_real_distribution<>> Dis;
+
     double ExecutionTime;
 };
 
@@ -414,9 +413,11 @@ public:
     template<typename... Args>
     Executor(const char* name, size_t processorCount, Args&&... args)
         : Name(name)
-        , Processors(processorCount, ProcessorType(std::forward<Args>(args)...))
         , BusyProcessorCount(0)
     {
+        for (size_t i = 0; i < processorCount; ++i) {
+            Processors.emplace_back(std::forward<Args>(args)...);
+        }
     }
 
     void Tick(double dt) override {
