@@ -35,6 +35,7 @@ void SetupCurrentPdiskModel(ClosedPipeLine &pipeline) {
     pipeline.AddQueue("SubmitQ", 0);
     pipeline.AddFixedTimeExecutor("Smb", smbThreads, smbExecTime);
     pipeline.AddPercentileTimeExecutor("NVMe", NVMeInflight, diskPercentiles);
+    pipeline.AddFlushController("Flush");
 }
 
 void EasyMain() {
@@ -47,7 +48,7 @@ void EasyMain() {
 
     double currentTime = Now();
 
-    for (size_t i = 0; i < 10000000; ++i) {
+    for (size_t i = 0; i < 10000000000000; ++i) {
         if (IsKeyDownward(kKeyEscape)) {
             break;
         }

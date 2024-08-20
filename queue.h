@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <deque>
+#include <optional>
+#include <set>
 
 #include "engine/easy.h"
 #include "engine/easy_drawing.h"
@@ -128,14 +130,23 @@ public:
 // Event
 
 struct Event {
+private:
     Event()
         : Id(++EventCounter)
         , StartTime(Now())
     {
-        StartStage();
     }
 
+public:
     Event(const Event& other) = default;
+
+    static Event NewEvent() {
+        return Event();
+    }
+
+    bool operator<(const Event& other) const {
+        return Id < other.Id;
+    }
 
     double GetDuration() const {
         return Now() - StartTime;
@@ -147,6 +158,10 @@ struct Event {
 
     void StartStage() {
         StageStarted = Now();
+    }
+
+    size_t GetId() const {
+        return Id;
     }
 
 private:
@@ -191,7 +206,7 @@ public:
         , QueueTimeUs(Histogram::HistogramWithUsBuckets())
     {
         for (size_t i = 0; i < initialEvents; ++i) {
-            Events.emplace_back();
+            PushEvent(Event::NewEvent());
         }
     }
 
@@ -241,7 +256,7 @@ public:
         char text[128];
         auto queueLengthS = NumToStrWithSuffix(Events.size());
 
-        snprintf(text, sizeof(text), "%s: %s\np90: %dus",
+        snprintf(text, sizeof(text), "%s: %s\np90: %d us",
                  Name, queueLengthS.c_str(), QueueTimeUs.GetPercentile(90));
         GetFont().Draw(toSprite, text, 10, yPos + rHeight / 2 - 20);
     }
@@ -284,23 +299,23 @@ public:
         _IsEventReady = false;
         StartTime = 0;
         FinishTime = 0;
-        _Event = {};
+        _Event.reset();
     }
 
     Event PopEvent() {
-        auto event = _Event;
+        auto event = *_Event;
         Reset();
         return event;
     }
 
 protected:
-    bool _IsWorking = false;
+    bool _IsWorking = false; // might be false, but with event, when ready to pop
     bool _IsEventReady = false;
 
     double StartTime = 0;
     double FinishTime = 0;
 
-    Event _Event;
+    std::optional<Event> _Event;
 };
 
 // ----------------------------
@@ -483,7 +498,7 @@ public:
         DrawRectangle(toSprite, bottomLeft, topRight, Rgba(255, 255, 255, 255));
 
         char text[128];
-        snprintf(text, sizeof(text), "%s: %ld/%ld", Name, BusyProcessorCount, Processors.size());
+        snprintf(text, sizeof(text), "%s:\n%ld/%ld", Name, BusyProcessorCount, Processors.size());
         GetFont().Draw(toSprite, text, 10, yPos + minDimension / 2);
     }
 
@@ -493,6 +508,86 @@ private:
     std::vector<ProcessorType> Processors;
     size_t BusyProcessorCount = 0;
     size_t ReadyEventsCount = 0;
+};
+
+// ----------------------------
+// FlushController: events should wait all previous events to finish
+
+class FlushController : public IPipeLineItem {
+public:
+    FlushController(const char* name)
+        : Name(name)
+        , WaitingTimeUs(Histogram::HistogramWithUsBuckets())
+    {
+    }
+
+    void Tick(double) override {
+        /* do nothing */
+    }
+
+    bool IsReadyToPushEvent() const override {
+        return true;
+    }
+
+    void PushEvent(Event event) override {
+        event.StartStage();
+        WaitingEvents.insert(event);
+    }
+
+    bool IsReadyToPopEvent() const override {
+        if (WaitingEvents.empty()) {
+            return false;
+        }
+
+        size_t lowestId = WaitingEvents.begin()->GetId();
+        return lowestId - 1 == FinishedEventsBarrier;
+    }
+
+    Event PopEvent() override {
+        if (!IsReadyToPopEvent()) {
+            throw std::runtime_error("No events ready");
+        }
+
+        auto iter = WaitingEvents.begin();
+        auto event = *iter;
+        WaitingEvents.erase(iter);
+
+        if (event.GetId() - 1 != FinishedEventsBarrier) {
+            throw std::runtime_error("Oops, something went wrong with flush controller");
+        }
+
+        WaitingTimeUs.AddDuration((int)(event.GetStageDuration() * 1000000));
+
+        FinishedEventsBarrier = event.GetId();
+
+        return event;
+    }
+
+public:
+    void Draw(Sprite toSprite) override {
+        auto width = toSprite.Width();
+        auto height = toSprite.Height();
+
+        auto minDimension = std::min(width, height);
+        auto yPos = height / 2 - minDimension / 2;
+
+        Vec2Si32 bottomLeft(0, yPos);
+        Vec2Si32 topRight(minDimension, yPos + minDimension);
+
+        DrawRectangle(toSprite, bottomLeft, topRight, Rgba(255, 255, 255, 255));
+
+        char text[128];
+        snprintf(text, sizeof(text), "%s: %ld\np90: %d us",
+                 Name, WaitingEvents.size(), WaitingTimeUs.GetPercentile(90));
+        GetFont().Draw(toSprite, text, 10, yPos + minDimension / 2);
+    }
+
+private:
+    const char* Name;
+    Histogram WaitingTimeUs;
+
+    size_t FinishedEventsBarrier = 0; // all events with Id <= barrier are finished
+    std::set<Event> WaitingEvents;
 };
 
 // ----------------------------
@@ -519,26 +614,16 @@ public:
         Stages.emplace_back(new Executor<PercentileTimeProcessor>(name, processorCount, percentiles));
     }
 
+    void AddFlushController(const char* name) {
+        Stages.emplace_back(new FlushController(name));
+    }
+
     void Tick(double dt) {
         TotalTimePassed += dt;
 
         for (auto& stage: Stages) {
             stage->Tick(dt);
         }
-
-        auto& inputQueue = Stages.front();
-        auto& lastStage = Stages.back();
-
-        while (lastStage->IsReadyToPopEvent() && inputQueue->IsReadyToPushEvent()) {
-            auto event = lastStage->PopEvent();
-
-            ++TotalFinishedEvents;
-            EventDurationsUs.AddDuration((int)(event.GetDuration() * 1000000));
-
-            inputQueue->PushEvent(Event());
-        }
-
-        AvgRPS = (size_t)(TotalFinishedEvents / TotalTimePassed);
 
         if (Stages.size() <= 2) {
             return;
@@ -565,6 +650,21 @@ public:
                 nextStage->PushEvent(event);
             }
         }
+
+        auto& inputQueue = Stages.front();
+        auto& lastStage = Stages.back();
+
+        while (lastStage->IsReadyToPopEvent() && inputQueue->IsReadyToPushEvent()) {
+            auto event = lastStage->PopEvent();
+
+            ++TotalFinishedEvents;
+            EventDurationsUs.AddDuration((int)(event.GetDuration() * 1000000));
+
+            auto newEvent = Event::NewEvent();
+            inputQueue->PushEvent(newEvent);
+        }
+
+        AvgRPS = (size_t)(TotalFinishedEvents / TotalTimePassed);
     }
 
 public:
@@ -593,8 +693,9 @@ public:
 
         char text[512];
         snprintf(text, sizeof(text),
-            "TimePassed: %.2f s, AvgRPS: %ld\np10: %d us, p50: %d us, p90: %d us, p99: %d us, p100: %d us",
+            "TimePassed: %.2f s, Events: %ld, AvgRPS: %ld\np10: %d us, p50: %d us, p90: %d us, p99: %d us, p100: %d us",
             TotalTimePassed,
+            TotalFinishedEvents,
             AvgRPS,
             EventDurationsUs.GetPercentile(10),
             EventDurationsUs.GetPercentile(50),
