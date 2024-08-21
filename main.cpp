@@ -11,7 +11,7 @@ constexpr double updateScreenInterval = 0.8;
 constexpr double tickInterval = 1 * Usec;
 
 void SetupCurrentPdiskModel(ClosedPipeLine &pipeline) {
-    constexpr size_t startQueueSize = 16;
+    constexpr size_t startQueueSize = 32;
 
     constexpr size_t pdiskThreads = 1;
     constexpr double pdiskExecTime = 10 * Usec;
@@ -38,7 +38,7 @@ void SetupCurrentPdiskModel(ClosedPipeLine &pipeline) {
 }
 
 void SetupCurrentPdiskModelSlowNVMe(ClosedPipeLine &pipeline) {
-    constexpr size_t startQueueSize = 16;
+    constexpr size_t startQueueSize = 32;
 
     constexpr size_t pdiskThreads = 1;
     constexpr double pdiskExecTime = 10 * Usec;
