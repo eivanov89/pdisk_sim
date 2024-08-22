@@ -14,10 +14,10 @@ void SetupCurrentPdiskModel(ClosedPipeLine &pipeline) {
     constexpr size_t startQueueSize = 32;
 
     constexpr size_t pdiskThreads = 1;
-    constexpr double pdiskExecTime = 10 * Usec;
+    constexpr double pdiskExecTime = 5 * Usec;
 
     constexpr size_t smbThreads = 1;
-    constexpr double smbExecTime = 5 * Usec;
+    constexpr double smbExecTime = 2 * Usec;
 
     constexpr size_t NVMeInflight = 128;
     PercentileTimeProcessor::Percentiles diskPercentilesUs = {
@@ -41,10 +41,10 @@ void SetupCurrentPdiskModelSlowNVMe(ClosedPipeLine &pipeline) {
     constexpr size_t startQueueSize = 32;
 
     constexpr size_t pdiskThreads = 1;
-    constexpr double pdiskExecTime = 10 * Usec;
+    constexpr double pdiskExecTime = 5 * Usec;
 
     constexpr size_t smbThreads = 1;
-    constexpr double smbExecTime = 5 * Usec;
+    constexpr double smbExecTime = 2 * Usec;
 
     constexpr size_t NVMeInflight = 128;
     PercentileTimeProcessor::Percentiles diskPercentilesUs = {
